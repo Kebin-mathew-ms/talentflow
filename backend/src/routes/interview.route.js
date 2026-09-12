@@ -282,6 +282,16 @@ router.post("/join-exam", async (req, res) => {
         );
 
         if (existingSub) {
+            // If candidate has a generic fallback question AND interview now has a real questionPool, assign a random question!
+            if (
+                (!existingSub.assignedQuestion || existingSub.assignedQuestion.title === "General Technical Assessment") &&
+                interview.questionPool && interview.questionPool.length > 0
+            ) {
+                const randomIndex = Math.floor(Math.random() * interview.questionPool.length);
+                existingSub.assignedQuestion = interview.questionPool[randomIndex];
+                await interview.save();
+            }
+
             return res.status(200).json({
                 assignedQuestion: existingSub.assignedQuestion,
                 submission: existingSub,
@@ -323,6 +333,34 @@ router.post("/join-exam", async (req, res) => {
     } catch (error) {
         console.error("Error joining exam:", error);
         res.status(500).json({ message: "Server error joining exam", error: error.message });
+    }
+});
+
+// 11b. DISPATCH QUESTION POOL & RANDOMIZE ASSIGNMENTS FOR ALL CANDIDATES IN ROOM
+router.post("/dispatch-pool", async (req, res) => {
+    try {
+        const { roomId, questions } = req.body;
+        let interview = await Interview.findOne({ roomId });
+
+        if (!interview) {
+            return res.status(404).json({ message: "Interview session not found" });
+        }
+
+        interview.questionPool = questions || [];
+
+        // Randomize assignment for each candidate in the room
+        if (interview.questionPool.length > 0 && interview.candidateSubmissions.length > 0) {
+            interview.candidateSubmissions.forEach((sub) => {
+                const randomIndex = Math.floor(Math.random() * interview.questionPool.length);
+                sub.assignedQuestion = interview.questionPool[randomIndex];
+            });
+        }
+
+        await interview.save();
+        res.status(200).json({ message: "Question pool dispatched and randomized", interview });
+    } catch (error) {
+        console.error("Error dispatching question pool:", error);
+        res.status(500).json({ message: "Server error dispatching question pool" });
     }
 });
 

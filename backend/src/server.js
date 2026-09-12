@@ -97,11 +97,17 @@ io.on("connection", (socket) => {
   socket.on("dispatch-question-pool", async ({ roomId, questions }) => {
     try {
       const { Interview } = await import("./models/Interview.js");
-      await Interview.findOneAndUpdate(
-        { roomId },
-        { $set: { questionPool: questions } },
-        { new: true, upsert: true }
-      );
+      let interview = await Interview.findOne({ roomId });
+      if (interview) {
+        interview.questionPool = questions || [];
+        if (interview.questionPool.length > 0 && interview.candidateSubmissions.length > 0) {
+          interview.candidateSubmissions.forEach((sub) => {
+            const randomIndex = Math.floor(Math.random() * interview.questionPool.length);
+            sub.assignedQuestion = interview.questionPool[randomIndex];
+          });
+        }
+        await interview.save();
+      }
       io.in(roomId).emit("question-pool-dispatched", { roomId, questions });
     } catch (err) {
       console.error("Error dispatching question pool:", err);

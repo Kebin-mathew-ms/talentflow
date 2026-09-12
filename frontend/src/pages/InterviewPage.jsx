@@ -247,7 +247,7 @@ const MeetingRoom = () => {
       
       const poolNotice = {
         id: Date.now(),
-        text: `⚡ QUESTION POOL DISPATCHED (${selectedQuestionsPool.length} Problems):\n` + selectedQuestionsPool.map(q => `• ${q.title}`).join("\n"),
+        text: `⚡ QUESTION POOL DISPATCHED (${selectedQuestionsPool.length} Problems Pool).\nEach candidate in the room has been randomly assigned 1 problem.`,
         sender: "System Exam Engine",
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
