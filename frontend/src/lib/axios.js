@@ -1,14 +1,19 @@
 import axios from "axios";
 
+const getApiBaseUrl = () => {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+
+  if (typeof window !== "undefined") {
+    return `http://${window.location.hostname}:3000/api`;
+  }
+
+  return "http://localhost:3000/api";
+};
+
+export const API_BASE_URL = getApiBaseUrl();
+export const SOCKET_URL = API_BASE_URL.replace(/\/api$/, "");
+
 export const axiosInstance = axios.create({
-  // UPDATE THIS LINE:
-  // If your backend is on port 5000:
-  //baseURL: "http://192.168.215.239:3000/api", 
-  
-  // OR if your backend is on port 3000:
-  //baseURL: "http://192.168.96.239:3000/api",
-  baseURL: "http://10.10.159.188:3000/api", 
-
-
+  baseURL: API_BASE_URL,
   withCredentials: true,
 });

@@ -3,7 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { List, LogOut, Video, Clock, X, CheckCircle, XCircle, AlertCircle, CalendarPlus, Mail, Calendar, Trash2, Edit, BookOpen, Plus, FileDown, ShieldAlert, Cpu } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import axios from "axios"; 
+import { axiosInstance } from "../lib/axios"; 
 
 // --- NEW IMPORTS FOR PDF ---
 import jsPDF from "jspdf";
@@ -22,6 +22,7 @@ const AdminDashboard = () => {
   const [selectedInterview, setSelectedInterview] = useState(null);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [scheduleData, setScheduleData] = useState({ email: "", date: "", time: "" });
+  const [selectedPoolQuestions, setSelectedPoolQuestions] = useState([]);
   
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [rescheduleData, setRescheduleData] = useState({ roomId: "", date: "", time: "" });
@@ -37,13 +38,13 @@ const AdminDashboard = () => {
     const fetchDashboardData = async () => {
       try {
         if (authUser?._id) {
-            const historyRes = await axios.get(`http://10.10.159.188:3000/api/interview/history/${authUser._id}`);
+            const historyRes = await axiosInstance.get(`/interview/history/${authUser._id}`);
             setHistory(historyRes.data);
 
-            const upcomingRes = await axios.get(`http://10.10.159.188:3000/api/interview/upcoming/${authUser._id}`);
+            const upcomingRes = await axiosInstance.get(`/interview/upcoming/${authUser._id}`);
             setUpcoming(upcomingRes.data);
 
-            const questionsRes = await axios.get(`http://10.10.159.188:3000/api/questions/${authUser._id}`);
+            const questionsRes = await axiosInstance.get(`/questions/${authUser._id}`);
             setQuestionBank(questionsRes.data);
         }
       } catch (error) {
@@ -60,7 +61,7 @@ const AdminDashboard = () => {
 
   const handleUpdateVerdict = async (verdict) => {
     try {
-        await axios.post("http://10.10.159.188:3000/api/interview/end", {
+        await axiosInstance.post("/interview/end", {
             roomId: selectedInterview.roomId,
             verdict: verdict
         });
@@ -79,20 +80,48 @@ const AdminDashboard = () => {
     }
   };
 
+  const handleIndividualVerdict = async (candidateId, verdict) => {
+    try {
+      await axiosInstance.post("/interview/candidate-verdict", {
+        roomId: selectedInterview.roomId,
+        candidateId,
+        verdict
+      });
+
+      setSelectedInterview(prev => {
+        if (!prev) return prev;
+        const updatedSubs = (prev.candidateSubmissions || []).map(sub => {
+          const idVal = sub.candidateId?._id || sub.candidateId;
+          if (idVal === candidateId) {
+            return { ...sub, verdict };
+          }
+          return sub;
+        });
+        return { ...prev, candidateSubmissions: updatedSubs };
+      });
+      toast.success(`Candidate marked as ${verdict}`);
+    } catch (error) {
+      console.error("Error updating candidate verdict:", error);
+      toast.error("Failed to update candidate verdict.");
+    }
+  };
+
   const handleScheduleSubmit = async (e) => {
       e.preventDefault();
       try {
           const combinedDateTime = new Date(`${scheduleData.date}T${scheduleData.time}`).toISOString();
           
-          const res = await axios.post("http://10.10.159.188:3000/api/interview/schedule", {
+          const res = await axiosInstance.post("/interview/schedule", {
               email: scheduleData.email,
               scheduledDate: combinedDateTime,
-              interviewerId: authUser._id
+              interviewerId: authUser._id,
+              questionPool: selectedPoolQuestions
           });
 
-          toast.success("Interview Scheduled Successfully!");
+          toast.success("Interview Scheduled Successfully with Question Pool!");
           setShowScheduleModal(false);
           setScheduleData({ email: "", date: "", time: "" });
+          setSelectedPoolQuestions([]);
 
           setUpcoming(prev => [...prev, res.data].sort((a,b) => new Date(a.scheduledDate) - new Date(b.scheduledDate)));
       } catch (error) {
@@ -104,7 +133,7 @@ const AdminDashboard = () => {
       if (!window.confirm("Are you sure you want to cancel this scheduled interview?")) return;
 
       try {
-          await axios.delete(`http://10.10.159.188:3000/api/interview/cancel/${roomId}`);
+          await axiosInstance.delete(`/interview/cancel/${roomId}`);
           setUpcoming(upcoming.filter(item => item.roomId !== roomId));
           toast.success("Interview cancelled successfully!");
       } catch (error) {
@@ -126,7 +155,7 @@ const AdminDashboard = () => {
       e.preventDefault();
       try {
           const combinedDateTime = new Date(`${rescheduleData.date}T${rescheduleData.time}`).toISOString();
-          const res = await axios.put(`http://10.10.159.188:3000/api/interview/reschedule/${rescheduleData.roomId}`, {
+          const res = await axiosInstance.put(`/interview/reschedule/${rescheduleData.roomId}`, {
               scheduledDate: combinedDateTime
           });
 
@@ -142,7 +171,7 @@ const AdminDashboard = () => {
   const handleAddQuestion = async (e) => {
     e.preventDefault();
     try {
-        const res = await axios.post("http://10.10.159.188:3000/api/questions/add", {
+        const res = await axiosInstance.post("/questions/add", {
             interviewerId: authUser._id,
             title: newQuestion.title,
             description: newQuestion.description
@@ -159,7 +188,7 @@ const AdminDashboard = () => {
   const handleDeleteQuestion = async (id) => {
     if (!window.confirm("Delete this question?")) return;
     try {
-        await axios.delete(`http://10.10.159.188:3000/api/questions/${id}`);
+        await axiosInstance.delete(`/questions/${id}`);
         setQuestionBank(questionBank.filter(q => q._id !== id));
         toast.success("Question deleted");
     } catch (error) {
@@ -381,6 +410,36 @@ const AdminDashboard = () => {
                             <input type="time" required value={scheduleData.time} onChange={(e) => setScheduleData({...scheduleData, time: e.target.value})} className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none" />
                         </div>
                     </div>
+
+                    {questionBank.length > 0 && (
+                      <div>
+                        <label className="text-sm font-semibold text-gray-700 mb-1 block">Question Pool for Exam (Random Assignment)</label>
+                        <div className="max-h-32 overflow-y-auto border border-gray-200 rounded-lg p-2 space-y-1.5 bg-gray-50">
+                          {questionBank.map((q) => {
+                            const isSelected = selectedPoolQuestions.some(item => (item._id && q._id ? item._id === q._id : item.title === q.title && item.description === q.description));
+                            return (
+                              <label key={q._id} className="flex items-center gap-2 text-xs text-gray-800 cursor-pointer p-1 rounded hover:bg-white">
+                                <input 
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedPoolQuestions(prev => [...prev, { _id: q._id, title: q.title, description: q.description }]);
+                                    } else {
+                                      setSelectedPoolQuestions(prev => prev.filter(item => (item._id && q._id ? item._id !== q._id : item.title !== q.title)));
+                                    }
+                                  }}
+                                  className="rounded text-purple-600 focus:ring-purple-500"
+                                />
+                                <span className="font-semibold truncate">{q.title}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <p className="text-[10px] text-purple-600 mt-1 font-medium">Selected {selectedPoolQuestions.length} questions for random assignment.</p>
+                      </div>
+                    )}
+
                     <button type="submit" className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg shadow-md transition mt-4">Confirm Schedule</button>
                 </form>
             </div>
@@ -407,46 +466,68 @@ const AdminDashboard = () => {
 
       {selectedInterview && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200">
+            <div className="bg-white rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh]">
                 <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                    <h2 className="text-xl font-bold text-gray-800">Interview Details</h2>
+                    <h2 className="text-xl font-bold text-gray-800">Exam Room Submissions & Evaluation</h2>
                     <button onClick={() => setSelectedInterview(null)} className="p-2 hover:bg-gray-200 rounded-full transition text-gray-500"><X size={20} /></button>
                 </div>
-                <div className="p-6 space-y-5">
-                    <div><p className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1">Candidate Name</p><p className="font-bold text-lg text-gray-900">{selectedInterview.candidateName || "Unknown"}</p></div>
+                
+                <div className="p-6 space-y-5 overflow-y-auto">
                     <div className="grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded-xl border border-gray-100">
                         <div><p className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1">Room ID</p><p className="font-medium text-gray-800 font-mono">{selectedInterview.roomId}</p></div>
                         <div><p className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-1">Date</p><p className="font-medium text-gray-800">{new Date(selectedInterview.startTime).toLocaleDateString()}</p></div>
                     </div>
-                    <div>
-                        <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-2">Current Result</p>
-                        <div className="flex items-center gap-2">
-                            {selectedInterview.verdict === 'Pass' && <span className="flex items-center gap-1.5 text-sm font-bold text-green-700 bg-green-100 px-3 py-1.5 rounded-lg border border-green-200"><CheckCircle size={16}/> Passed</span>}
-                            {selectedInterview.verdict === 'Fail' && <span className="flex items-center gap-1.5 text-sm font-bold text-red-700 bg-red-100 px-3 py-1.5 rounded-lg border border-red-200"><XCircle size={16}/> Failed</span>}
-                            {selectedInterview.verdict === 'Pending' && <span className="flex items-center gap-1.5 text-sm font-bold text-yellow-700 bg-yellow-100 px-3 py-1.5 rounded-lg border border-yellow-200"><AlertCircle size={16}/> Pending Grading</span>}
+
+                    {selectedInterview.candidateSubmissions && selectedInterview.candidateSubmissions.length > 0 ? (
+                        <div className="space-y-4">
+                            <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Candidate Exam Results ({selectedInterview.candidateSubmissions.length})</h3>
+                            {selectedInterview.candidateSubmissions.map((sub) => {
+                                const candId = sub.candidateId?._id || sub.candidateId;
+                                return (
+                                    <div key={candId || Math.random()} className="border border-gray-200 rounded-xl p-4 bg-gray-50 space-y-3">
+                                        <div className="flex justify-between items-center border-b border-gray-200 pb-2">
+                                            <div>
+                                                <h4 className="font-bold text-gray-900">{sub.candidateName || "Candidate"}</h4>
+                                                <p className="text-xs text-purple-700 font-semibold">Question: {sub.assignedQuestion?.title || "Exam Task"}</p>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${sub.verdict === 'Pass' ? 'bg-green-100 text-green-700' : sub.verdict === 'Fail' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                                                    {sub.verdict || "Pending"}
+                                                </span>
+                                                <button onClick={() => handleIndividualVerdict(candId, 'Pass')} className="px-2.5 py-1 text-xs bg-green-600 hover:bg-green-700 text-white font-bold rounded shadow-sm">Pass</button>
+                                                <button onClick={() => handleIndividualVerdict(candId, 'Fail')} className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white font-bold rounded shadow-sm">Fail</button>
+                                            </div>
+                                        </div>
+                                        <div className="bg-[#1e1e1e] p-3 rounded font-mono text-xs text-gray-300 max-h-36 overflow-y-auto">
+                                            <pre className="whitespace-pre-wrap">{sub.submittedCode || "// No code submitted"}</pre>
+                                        </div>
+                                        <div className="bg-black p-2 rounded font-mono text-xs text-green-400">
+                                            <pre className="whitespace-pre-wrap">{sub.output || "No output"}</pre>
+                                        </div>
+                                    </div>
+                                );
+                            })}
                         </div>
-                    </div>
+                    ) : (
+                        <div>
+                            <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-2">Overall Result</p>
+                            <div className="flex items-center gap-2">
+                                {selectedInterview.verdict === 'Pass' && <span className="flex items-center gap-1.5 text-sm font-bold text-green-700 bg-green-100 px-3 py-1.5 rounded-lg border border-green-200"><CheckCircle size={16}/> Passed</span>}
+                                {selectedInterview.verdict === 'Fail' && <span className="flex items-center gap-1.5 text-sm font-bold text-red-700 bg-red-100 px-3 py-1.5 rounded-lg border border-red-200"><XCircle size={16}/> Failed</span>}
+                                {selectedInterview.verdict === 'Pending' && <span className="flex items-center gap-1.5 text-sm font-bold text-yellow-700 bg-yellow-100 px-3 py-1.5 rounded-lg border border-yellow-200"><AlertCircle size={16}/> Pending Grading</span>}
+                            </div>
+                        </div>
+                    )}
                 </div>
                 <div className="p-5 border-t border-gray-100 bg-gray-50 flex justify-end gap-3">
-                    {selectedInterview.verdict === 'Pending' ? (
-                        <>
-                            <button onClick={() => setSelectedInterview(null)} className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition font-medium">Cancel</button>
-                            <button onClick={() => handleUpdateVerdict('Fail')} className="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition font-bold border border-red-200">Fail Candidate</button>
-                            <button onClick={() => handleUpdateVerdict('Pass')} className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-bold shadow-md shadow-green-200">Pass Candidate</button>
-                        </>
-                    ) : (
-                        <>
-                            {/* --- NEW: DOWNLOAD REPORT BUTTON --- */}
-                            <button 
-                                onClick={handleDownloadPDF} 
-                                disabled={isDownloading}
-                                className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg transition font-bold text-sm shadow-md ${isDownloading ? 'bg-gray-400 cursor-not-allowed text-white' : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200'}`}
-                            >
-                                <FileDown size={18} /> {isDownloading ? "Generating..." : "Download Report"}
-                            </button>
-                            <button onClick={() => setSelectedInterview(null)} className="px-6 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition font-medium">Close</button>
-                        </>
-                    )}
+                    <button 
+                        onClick={handleDownloadPDF} 
+                        disabled={isDownloading}
+                        className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg transition font-bold text-sm shadow-md ${isDownloading ? 'bg-gray-400 cursor-not-allowed text-white' : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-200'}`}
+                    >
+                        <FileDown size={18} /> {isDownloading ? "Generating..." : "Download Report PDF"}
+                    </button>
+                    <button onClick={() => setSelectedInterview(null)} className="px-6 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition font-medium">Close</button>
                 </div>
             </div>
         </div>
@@ -562,9 +643,31 @@ const AdminDashboard = () => {
                   </div>
               </div>
 
-              {/* Saved Code Answers */}
+              {/* Saved Code Answers & Multi-Candidate Exam Submissions */}
               <div>
-                  <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b-2 border-gray-100 pb-2 flex items-center gap-2"><BookOpen size={24}/> Candidate Solutions</h2>
+                  <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b-2 border-gray-100 pb-2 flex items-center gap-2"><BookOpen size={24}/> Candidate Solutions & Exam Submissions</h2>
+                  
+                  {selectedInterview?.candidateSubmissions && selectedInterview.candidateSubmissions.length > 0 && (
+                    <div className="space-y-6 mb-8">
+                      <h3 className="text-lg font-bold text-purple-800">Multi-Candidate Exam Submissions</h3>
+                      {selectedInterview.candidateSubmissions.map((sub, idx) => (
+                        <div key={idx} className="border border-purple-200 bg-purple-50/50 rounded-xl overflow-hidden p-4">
+                          <div className="flex justify-between items-center mb-2 border-b border-purple-100 pb-2">
+                            <span className="font-bold text-purple-900">{sub.candidateName || "Candidate"}</span>
+                            <span className="text-xs font-bold px-2 py-0.5 rounded bg-purple-200 text-purple-800">Assigned: {sub.assignedQuestion?.title || "Exam Problem"}</span>
+                          </div>
+                          <p className="text-xs text-gray-700 mb-2 font-mono">{sub.assignedQuestion?.description}</p>
+                          <div className="bg-[#1e1e1e] p-3 rounded text-sm font-mono text-gray-200 mb-2">
+                            <pre className="whitespace-pre-wrap">{sub.submittedCode || "// No code submitted"}</pre>
+                          </div>
+                          <div className="bg-black p-2 rounded text-xs font-mono text-green-400">
+                            <pre className="whitespace-pre-wrap">{sub.output || "No output"}</pre>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   {selectedInterview?.savedAnswers && selectedInterview.savedAnswers.length > 0 ? (
                       <div className="space-y-8">
                           {selectedInterview.savedAnswers.map((ans, idx) => (
@@ -584,7 +687,9 @@ const AdminDashboard = () => {
                           ))}
                       </div>
                   ) : (
-                      <p className="text-gray-500 italic p-6 bg-gray-50 border border-dashed border-gray-200 rounded-xl text-center">No code answers were manually saved during this interview.</p>
+                      (!selectedInterview?.candidateSubmissions || selectedInterview.candidateSubmissions.length === 0) && (
+                        <p className="text-gray-500 italic p-6 bg-gray-50 border border-dashed border-gray-200 rounded-xl text-center">No code answers were manually saved during this interview.</p>
+                      )
                   )}
               </div>
 

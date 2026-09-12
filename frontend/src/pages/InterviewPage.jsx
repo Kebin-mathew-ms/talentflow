@@ -13,14 +13,14 @@ import { useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import '@stream-io/video-react-sdk/dist/css/styles.css';
 
-import { Loader2, Send, Mic, MicOff, Video, VideoOff, PhoneOff, Users, MessageSquare, MonitorUp, AlertTriangle, RefreshCw, EyeOff, MoveHorizontal, Code, PenTool, BookOpen } from 'lucide-react'; // Added BookOpen icon
+import { Loader2, Send, Mic, MicOff, Video, VideoOff, PhoneOff, Users, MessageSquare, MonitorUp, AlertTriangle, RefreshCw, EyeOff, MoveHorizontal, Code, PenTool, BookOpen } from 'lucide-react'; 
 import CodeEditor from "../components/CodeEditor"; 
 import Whiteboard from "../components/Whiteboard"; 
 
 import io from "socket.io-client"; 
 import toast from "react-hot-toast";
 import * as faceapi from 'face-api.js'; 
-import axios from "axios";
+import { axiosInstance, SOCKET_URL } from "../lib/axios";
 
 const apiKey = "mptsv46er4qt"; 
 
@@ -42,7 +42,6 @@ const MeetingRoom = () => {
   const [newQuestion, setNewQuestion] = useState("");
   const [socket, setSocket] = useState(null);
   
-  // --- NEW: State to hold questions from Question Bank ---
   const [savedQuestions, setSavedQuestions] = useState([]);
   
   const [activeTab, setActiveTab] = useState("code"); 
@@ -53,12 +52,11 @@ const MeetingRoom = () => {
   const [faceWarning, setFaceWarning] = useState(""); 
   const lastWarningTime = useRef(0);
 
-  // --- NEW: Fetch Question Bank questions for the Admin ---
   useEffect(() => {
     const fetchQuestions = async () => {
       if (authUser?.role === "interviewer") {
         try {
-          const res = await axios.get(`http://10.10.159.188:3000/api/questions/${authUser._id}`);
+          const res = await axiosInstance.get(`/questions/${authUser._id}`);
           setSavedQuestions(res.data);
         } catch (error) {
           console.error("Error fetching question bank:", error);
@@ -69,12 +67,72 @@ const MeetingRoom = () => {
   }, [authUser]);
 
   useEffect(() => {
-    const newSocket = io("http://10.10.159.188:3000"); 
+    const initExamQuestion = async () => {
+      if (authUser?.role === "candidate" && authUser?._id && roomId) {
+        try {
+          const res = await axiosInstance.post("/interview/join-exam", {
+            roomId,
+            candidateId: authUser._id,
+            candidateName: authUser.name
+          });
+          if (res.data?.assignedQuestion) {
+            const q = res.data.assignedQuestion;
+            setQuestions((prev) => {
+              if (prev.some(item => item.isAssigned)) return prev;
+              return [{
+                id: "assigned-" + Date.now(),
+                text: `🎯 YOUR RANDOMLY ASSIGNED EXAM QUESTION:\n\n📌 ${q.title}\n${q.description}`,
+                sender: "System Exam Engine",
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                isAssigned: true
+              }, ...prev];
+            });
+          }
+        } catch (error) {
+          console.error("Error fetching assigned exam question:", error);
+        }
+      }
+    };
+    initExamQuestion();
+  }, [authUser, roomId]);
+
+  const [selectedQuestionsPool, setSelectedQuestionsPool] = useState([]);
+
+  useEffect(() => {
+    const newSocket = io(SOCKET_URL); 
     setSocket(newSocket);
     newSocket.emit("join-room", roomId);
 
     newSocket.on("question-update", (questionData) => {
       setQuestions((prev) => [...prev, questionData]);
+    });
+
+    newSocket.on("question-pool-dispatched", async () => {
+      toast.success("⚡ Question pool dispatched! Assigning random question...");
+      if (authUser?.role === "candidate" && authUser?._id) {
+        try {
+          const res = await axiosInstance.post("/interview/join-exam", {
+            roomId,
+            candidateId: authUser._id,
+            candidateName: authUser.name
+          });
+          if (res.data?.assignedQuestion) {
+            const q = res.data.assignedQuestion;
+            setQuestions((prev) => [
+              {
+                id: "assigned-" + Date.now(),
+                text: `🎯 YOUR RANDOMLY ASSIGNED EXAM QUESTION:\n\n📌 ${q.title}\n${q.description}`,
+                sender: "System Exam Engine",
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                isAssigned: true
+              },
+              ...prev
+            ]);
+          }
+        } catch (err) {
+          console.error("Error assigning question:", err);
+        }
+      }
     });
     
     newSocket.on("meeting-ended", () => {
@@ -87,7 +145,7 @@ const MeetingRoom = () => {
     });
 
     return () => newSocket.disconnect();
-  }, [roomId, navigate]);
+  }, [roomId, navigate, authUser]);
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);
@@ -112,6 +170,7 @@ const MeetingRoom = () => {
     loadModels();
   }, []);
 
+  // --- UPGRADED: AI Proctoring Loop wired to the Auto-Kick Engine! ---
   useEffect(() => {
     if (!modelsLoaded || authUser.role === 'interviewer') return;
     
@@ -132,9 +191,9 @@ const MeetingRoom = () => {
       let currentIssue = ""; 
 
       if (detections.length === 0) {
-        currentIssue = "⚠️ ALERT: Face Not Visible!";
+        currentIssue = "Face not visible or completely turned away";
       } else if (detections.length > 1) {
-        currentIssue = "⚠️ ALERT: Multiple Faces Detected!";
+        currentIssue = "Multiple faces detected in frame";
       } else {
         const landmarks = detections[0].landmarks;
         const nose = landmarks.getNose()[3];
@@ -146,57 +205,55 @@ const MeetingRoom = () => {
         const distToRight = Math.abs(nose.x - rightJaw.x);
         const ratio = distToLeft / distToRight;
 
-        if (ratio < 0.5) {
-            currentIssue = "⚠️ ALERT: Looking Away (Right)";
-        } else if (ratio > 2.0) {
-            currentIssue = "⚠️ ALERT: Looking Away (Left)";
+        if (ratio < 0.5 || ratio > 2.0) {
+            currentIssue = "Candidate is looking off-screen";
         }
       }
 
       if (currentIssue) {
         setFaceWarning(currentIssue);
 
+        // Send alert to CodeEditor Auto-Kick Engine (with 4 second cooldown)
         if (now - lastWarningTime.current > 4000) {
-            toast.error(currentIssue);
             lastWarningTime.current = now;
-
-            if (socket) {
-                 const alertData = {
-                    id: Date.now(),
-                    text: currentIssue,
-                    sender: "SYSTEM",
-                    time: new Date().toLocaleTimeString()
-                };
-                socket.emit("question-change", { roomId, question: alertData });
-            }
+            
+            // This is the magic line that connects ML to your database kicking system!
+            window.dispatchEvent(new CustomEvent('face-tracking-alert', { 
+                detail: { reason: currentIssue } 
+            }));
         }
       } else {
         setFaceWarning(""); 
       }
     };
 
-    const interval = setInterval(detectBehavior, 1000); 
+    // Scans the face every 1.5 seconds to save computer performance
+    const interval = setInterval(detectBehavior, 1500); 
     return () => clearInterval(interval);
 
-  }, [modelsLoaded, localParticipant, socket, authUser.role]);
+  }, [modelsLoaded, localParticipant, authUser.role]);
 
-  useEffect(() => {
-    if (authUser.role === 'interviewer') return; 
-    const handleVisibilityChange = () => {
-        if (document.hidden && socket) {
-            toast.error("⚠️ WARNING: Tab Switching is Monitored!");
-            const alertData = {
-                id: Date.now(),
-                text: "⚠️ ALERT: Candidate switched browser tabs!",
-                sender: "SYSTEM",
-                time: new Date().toLocaleTimeString()
-            };
-            socket.emit("question-change", { roomId, question: alertData });
-        }
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [socket, authUser.role]);
+  // (Removed the old redundant visibilitychange code here since CodeEditor handles it now!)
+
+  const handleDispatchPool = () => {
+    if (selectedQuestionsPool.length === 0) {
+      toast.error("Please select at least 1 question for the pool!");
+      return;
+    }
+
+    if (socket) {
+      socket.emit("dispatch-question-pool", { roomId, questions: selectedQuestionsPool });
+      toast.success(`⚡ Dispatched ${selectedQuestionsPool.length} questions! Candidates received random assignments.`);
+      
+      const poolNotice = {
+        id: Date.now(),
+        text: `⚡ QUESTION POOL DISPATCHED (${selectedQuestionsPool.length} Problems):\n` + selectedQuestionsPool.map(q => `• ${q.title}`).join("\n"),
+        sender: "System Exam Engine",
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+      socket.emit("question-change", { roomId, question: poolNotice });
+    }
+  };
 
   const handleAddQuestion = () => {
     if (!newQuestion.trim()) return;
@@ -213,7 +270,7 @@ const MeetingRoom = () => {
   const handleLeaveCall = async () => {
     if (authUser.role === 'interviewer') {
         try {
-            await axios.post("http://10.10.159.188:3000/api/interview/end", {
+            await axiosInstance.post("/interview/end", {
                 roomId,
                 verdict: "Pending" 
             });
@@ -230,7 +287,8 @@ const MeetingRoom = () => {
 
   return (
     <div className="flex flex-col h-full bg-black">
-      <video ref={videoRef} autoPlay muted className="absolute top-0 left-0 w-1 h-1 opacity-0 pointer-events-none" />
+      {/* Hidden local video element used ONLY for AI face tracking */}
+      <video ref={videoRef} autoPlay muted playsInline className="absolute top-0 left-0 w-1 h-1 opacity-0 pointer-events-none" />
       
       {/* --- TOP ROW --- */}
       <div className="h-[50%] bg-gray-900 relative border-b border-gray-700 flex flex-col min-h-0 overflow-hidden">
@@ -241,6 +299,13 @@ const MeetingRoom = () => {
             {authUser.role === 'candidate' && !hasOngoingScreenShare && (
                 <div className="bg-red-600/90 px-3 py-1 rounded-full text-white text-xs flex items-center gap-2 animate-pulse font-bold w-fit">
                     <MonitorUp size={12} /> SHARE SCREEN
+                </div>
+            )}
+            
+            {/* Visual warning for the candidate on their own video feed */}
+            {faceWarning && authUser.role === 'candidate' && (
+                <div className="bg-red-600 px-3 py-1 rounded-full text-white text-xs flex items-center gap-2 font-bold w-fit shadow-[0_0_15px_rgba(220,38,38,0.8)]">
+                    <AlertTriangle size={12} /> AI WARNING: {faceWarning}
                 </div>
             )}
           </div>
@@ -289,12 +354,12 @@ const MeetingRoom = () => {
                     </div>
                 ) : (
                     questions.map((q) => (
-                    <div key={q.id} className={`p-3 rounded-lg border shadow-sm ${q.sender === "SYSTEM" ? "bg-red-900/30 border-red-500/50" : "bg-gray-800 border-gray-700"}`}>
+                    <div key={q.id} className={`p-3 rounded-lg border shadow-sm ${q.sender === "System Anti-Cheat" || q.sender === "System" ? "bg-red-900/30 border-red-500/50" : "bg-gray-800 border-gray-700"}`}>
                         <div className="flex justify-between items-center mb-1">
-                            <span className={`text-xs font-bold ${q.sender === "SYSTEM" ? "text-red-400" : "text-blue-400"}`}>{q.sender}</span>
+                            <span className={`text-xs font-bold ${q.sender === "System Anti-Cheat" || q.sender === "System" ? "text-red-400" : "text-blue-400"}`}>{q.sender}</span>
                             <span className="text-[10px] text-gray-500">{q.time}</span>
                         </div>
-                        <p className={`text-sm ${q.sender === "SYSTEM" ? "text-red-200 font-semibold" : "text-white"}`}>{q.text}</p>
+                        <p className={`text-sm ${q.sender === "System Anti-Cheat" || q.sender === "System" ? "text-red-200 font-semibold" : "text-white"}`}>{q.text}</p>
                     </div>
                     ))
                 )}
@@ -302,42 +367,57 @@ const MeetingRoom = () => {
             
             {authUser.role === "interviewer" && (
                 <div className="p-3 bg-gray-800 border-t border-gray-700 shrink-0 flex flex-col gap-2">
-                    {/* --- NEW: QUESTION BANK DROPDOWN --- */}
                     {savedQuestions.length > 0 && (
-                        <div className="relative">
-                            <BookOpen size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-blue-400 pointer-events-none" />
-                            <select 
-                                className="w-full bg-gray-900 text-gray-300 text-xs pl-8 pr-3 py-2 rounded-lg outline-none border border-gray-600 focus:border-blue-500 appearance-none cursor-pointer"
-                                onChange={(e) => {
-                                    if (e.target.value) {
-                                        // Auto-fills the input box so the admin can review before sending
-                                        setNewQuestion(e.target.value);
-                                        e.target.value = ""; // reset dropdown
-                                    }
-                                }}
-                                defaultValue=""
+                        <div className="bg-gray-900 border border-gray-700 rounded-lg p-2 space-y-2">
+                            <div className="flex justify-between items-center text-xs font-bold text-gray-300">
+                                <span className="flex items-center gap-1.5 text-blue-400">
+                                    <BookOpen size={14} /> Select Questions for Pool
+                                </span>
+                                <span className="text-[10px] text-purple-400">{selectedQuestionsPool.length} Selected</span>
+                            </div>
+                            <div className="max-h-28 overflow-y-auto space-y-1 custom-scrollbar pr-1">
+                                {savedQuestions.map((q) => {
+                                    const isSelected = selectedQuestionsPool.some(item => (item._id && q._id ? item._id === q._id : item.title === q.title && item.description === q.description));
+                                    return (
+                                        <label key={q._id} className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer p-1 rounded hover:bg-gray-800">
+                                            <input 
+                                                type="checkbox"
+                                                checked={isSelected}
+                                                onChange={(e) => {
+                                                    if (e.target.checked) {
+                                                        setSelectedQuestionsPool(prev => [...prev, { _id: q._id, title: q.title, description: q.description }]);
+                                                    } else {
+                                                        setSelectedQuestionsPool(prev => prev.filter(item => (item._id && q._id ? item._id !== q._id : item.title !== q.title)));
+                                                    }
+                                                }}
+                                                className="rounded text-purple-600 focus:ring-purple-500 bg-gray-900 border-gray-700"
+                                            />
+                                            <span className="truncate">{q.title}</span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                            <button
+                                onClick={handleDispatchPool}
+                                disabled={selectedQuestionsPool.length === 0}
+                                className="w-full py-1.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold text-xs rounded-lg transition flex justify-center items-center gap-1.5 shadow-md shadow-purple-900/30"
                             >
-                                <option value="" disabled>Select from Question Bank...</option>
-                                {savedQuestions.map((q) => (
-                                    <option key={q._id} value={q.description}>
-                                        {q.title}
-                                    </option>
-                                ))}
-                            </select>
+                                ⚡ Dispatch Question Pool ({selectedQuestionsPool.length})
+                            </button>
                         </div>
                     )}
 
                     <div className="flex gap-2">
                         <input
                             type="text"
-                            placeholder="Type question..."
-                            className="flex-1 bg-black/30 text-white text-sm px-4 py-2 rounded-lg outline-none border border-gray-600 focus:border-blue-500"
+                            placeholder="Type custom note or question..."
+                            className="flex-1 bg-black/30 text-white text-xs px-3 py-2 rounded-lg outline-none border border-gray-600 focus:border-blue-500"
                             value={newQuestion}
                             onChange={(e) => setNewQuestion(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleAddQuestion()}
                         />
-                        <button onClick={handleAddQuestion} className="bg-blue-600 hover:bg-blue-700 text-white px-3 rounded-lg">
-                            <Send size={18} />
+                        <button onClick={handleAddQuestion} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1">
+                            <Send size={14} /> Send
                         </button>
                     </div>
                 </div>
@@ -412,7 +492,7 @@ const InterviewPage = () => {
             payload.interviewerId = authUser._id;
         }
 
-        await axios.post("http://10.10.159.188:3000/api/interview/start", payload);
+        await axiosInstance.post("/interview/start", payload);
 
       } catch (error) {
         console.error(error);

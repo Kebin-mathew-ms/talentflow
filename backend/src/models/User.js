@@ -10,7 +10,7 @@ const userSchema = new mongoose.Schema(
     // --- NEW FIELD: Role ---
     role: { 
       type: String, 
-      enum: ["candidate", "interviewer"], // Only allows these two values
+      enum: ["candidate","interviewer"], // Only allows these two values
       default: "candidate" // Everyone starts as a candidate
     },
   },

@@ -26,7 +26,11 @@ export const signup = async (req, res) => {
     });
 
     // 4. Sync with Stream (Video Backend) - IMMEDIATE SYNC
-    await upsertStreamUser(user);
+    try {
+      await upsertStreamUser(user);
+    } catch (streamError) {
+      console.warn("Stream sync failed during signup, but account was created:", streamError.message);
+    }
 
     // 5. Generate API Token
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {

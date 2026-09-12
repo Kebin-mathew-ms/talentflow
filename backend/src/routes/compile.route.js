@@ -6,10 +6,11 @@ const router = express.Router();
 // The bulletproof URL
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-// 1. --- EXISTING: RUN CODE ROUTE ---
+// 1. --- EXISTING: RUN CODE ROUTE (NOW SUPPORTS CUSTOM INPUT) ---
 router.post("/", async (req, res) => {
   try {
-    const { code, language } = req.body;
+    // --- FIXED: Extract 'input' from the frontend request ---
+    const { code, language, input } = req.body;
 
     if (!code) {
       return res.status(400).json({ error: "Code cannot be empty" });
@@ -19,16 +20,23 @@ router.post("/", async (req, res) => {
       return res.status(500).json({ error: "Server Configuration Error: API key is missing." });
     }
 
+    // --- FIXED: Updated system prompt to handle Standard Input ---
     const systemPrompt = `You are a strict ${language} compiler and console execution environment. 
-    I will provide you with code. You must evaluate the code and reply ONLY with the exact console output it would produce. 
+    I will provide you with code, and optionally "Standard Input" (simulated keyboard input). You must evaluate the code using that input and reply ONLY with the exact console output it would produce. 
     If the code contains a syntax error or runtime error, reply ONLY with the standard compiler error message. 
     Do NOT include any conversational text, explanations, or markdown formatting like \`\`\`. Just the raw output.`;
+
+    // --- FIXED: Combine the code and the custom input so the AI can read both ---
+    let userContent = code;
+    if (input && input.trim() !== "") {
+        userContent = `Here is the code to execute:\n${code}\n\nHere is the Standard Input (stdin) the user typed:\n${input}`;
+    }
 
     const response = await axios.post(GROQ_URL, {
       model: "llama-3.3-70b-versatile",
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: code }
+        { role: "user", content: userContent } // Sending the combined prompt!
       ],
       temperature: 0.1, 
     }, {
@@ -66,7 +74,6 @@ router.post("/review", async (req, res) => {
       return res.status(500).json({ error: "Server Configuration Error: API key is missing." });
     }
 
-    // --- UPGRADED PROMPT FOR BETTER FORMATTING & BIG O NOTATION ---
     const reviewPrompt = `You are an expert Senior Software Engineer evaluating a candidate's ${language} code. 
     Do NOT write a paragraph. Reply using EXACTLY this format with clean line breaks:
 
@@ -81,7 +88,7 @@ router.post("/review", async (req, res) => {
         { role: "system", content: reviewPrompt }, 
         { role: "user", content: code }
       ],
-      temperature: 0.3, // Lowered slightly so it sticks strictly to the format
+      temperature: 0.3, 
     }, {
       headers: { 
         'Authorization': `Bearer ${process.env.GROQ_API_KEY.trim()}`, 

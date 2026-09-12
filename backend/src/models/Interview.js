@@ -22,6 +22,27 @@ const interviewSchema = new mongoose.Schema({
   aiReview: { type: String, default: "" },
   proctoringLogs: { type: [String], default: [] },
   
+  // --- NEW: QUESTION POOL & MULTI-CANDIDATE SUBMISSIONS ---
+  questionPool: [{
+    title: { type: String },
+    description: { type: String }
+  }],
+
+  candidateSubmissions: [{
+    candidateId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    candidateName: { type: String, default: "Unknown Candidate" },
+    assignedQuestion: {
+      title: { type: String },
+      description: { type: String }
+    },
+    submittedCode: { type: String, default: "" },
+    output: { type: String, default: "" },
+    verdict: { type: String, enum: ["Pass", "Fail", "Pending"], default: "Pending" },
+    proctoringLogs: { type: [String], default: [] },
+    aiReview: { type: String, default: "" },
+    submittedAt: { type: Date }
+  }],
+
   // --- NEW: INCREMENTAL SAVED ANSWERS ---
   savedAnswers: [{
       question: String,
